@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useWebRTC } from '../hooks/useWebRTC';
+import { useTranscription } from '../hooks/useTranscription';
 
 interface VideoCallProps {
   roomId: string;
@@ -18,6 +19,12 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
     signalingUrl,
     onConnectionChange: (connected) => setIsConnected(connected),
     onRemoteConnectionChange: (connected) => setRemoteConnected(connected),
+  });
+
+  const { transcriptions, clearTranscriptions, isAvailable: isTranscriptionAvailable } = useTranscription({
+    localStream,
+    remoteStream,
+    enabled: true,
   });
 
   useEffect(() => {
@@ -121,6 +128,55 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
                 </div>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* Transcription Section */}
+        <div className="mt-4 bg-gray-800 rounded-lg overflow-hidden shadow-2xl">
+          <div className="bg-gray-700 px-4 py-2 flex items-center justify-between">
+            <h3 className="text-white font-medium">Transcription</h3>
+            {transcriptions.length > 0 && (
+              <button
+                onClick={clearTranscriptions}
+                className="text-sm text-gray-300 hover:text-white transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="p-4 max-h-64 overflow-y-auto">
+            {!isTranscriptionAvailable ? (
+              <div className="text-gray-400 text-sm text-center py-4">
+                Speech recognition is not available in this browser. Please use Chrome or Edge for transcription.
+              </div>
+            ) : transcriptions.length === 0 ? (
+              <div className="text-gray-400 text-sm text-center py-4">
+                Transcripts will appear here as you speak...
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {transcriptions.map((transcript) => (
+                  <div
+                    key={transcript.id}
+                    className={`p-3 rounded-lg ${
+                      transcript.speaker === 'local'
+                        ? 'bg-blue-900 bg-opacity-30 border-l-4 border-blue-500'
+                        : 'bg-purple-900 bg-opacity-30 border-l-4 border-purple-500'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-semibold text-gray-300">
+                        {transcript.speaker === 'local' ? 'You' : 'Remote Peer'}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {transcript.timestamp.toLocaleTimeString()}
+                      </span>
+                    </div>
+                    <p className="text-white text-sm">{transcript.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
