@@ -69,8 +69,18 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
 
         {/* Error Display */}
         {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-            <strong>Error: </strong>{error}
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 whitespace-pre-line">
+            <strong>Error: </strong>
+            <div className="mt-1">{error}</div>
+            <div className="mt-2 text-sm">
+              <strong>Debugging steps:</strong>
+              <ul className="list-disc list-inside mt-1 space-y-1">
+                <li>Check browser console (F12) for detailed errors</li>
+                <li>Verify server is running: <code className="bg-red-200 px-1 rounded">cd server && npm run dev</code></li>
+                <li>If using ngrok, verify it's running: <code className="bg-red-200 px-1 rounded">ngrok http 8080</code></li>
+                <li>Check the signaling URL format: should be <code className="bg-red-200 px-1 rounded">ws://localhost:8080/ws</code> or <code className="bg-red-200 px-1 rounded">wss://your-url.ngrok.io/ws</code></li>
+              </ul>
+            </div>
           </div>
         )}
 

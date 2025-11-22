@@ -3,6 +3,15 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 
 const app = express();
+
+// Enable CORS for all routes
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
+
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -16,6 +25,7 @@ app.get('/healthz', (req, res) => {
 
 // WebSocket connection handling
 wss.on('connection', (ws, req) => {
+  console.log('New WebSocket connection attempt from:', req.socket.remoteAddress);
   let currentRoom = null;
   let userId = null;
 
@@ -92,6 +102,9 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
   });
+
+  // Log successful connection
+  console.log('WebSocket connection established');
 });
 
 function leaveRoom(roomId, ws, userId) {

@@ -75,12 +75,25 @@ export function useWebRTC({
         setLocalStream(stream);
 
         // Create WebSocket connection
+        console.log('Attempting to connect to:', signalingUrl);
         const ws = new WebSocket(signalingUrl);
         wsRef.current = ws;
 
+        // Set connection timeout
+        const connectionTimeout = setTimeout(() => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            console.error('WebSocket connection timeout');
+            setError(`Connection timeout. Check if server is running at ${signalingUrl}`);
+            ws.close();
+            onConnectionChange?.(false);
+          }
+        }, 10000); // 10 second timeout
+
         ws.onopen = () => {
-          console.log('WebSocket connected');
+          console.log('WebSocket connected successfully');
+          clearTimeout(connectionTimeout);
           onConnectionChange?.(true);
+          setError(null);
           
           // Join room
           ws.send(JSON.stringify({
@@ -92,13 +105,24 @@ export function useWebRTC({
 
         ws.onerror = (err) => {
           console.error('WebSocket error:', err);
-          setError('Failed to connect to signaling server');
+          clearTimeout(connectionTimeout);
+          const errorMsg = signalingUrl.startsWith('wss://') 
+            ? `Failed to connect to signaling server. Check:\n1. Is ngrok running?\n2. Is the URL correct? (${signalingUrl})\n3. Does the URL end with /ws?`
+            : `Failed to connect to signaling server. Check:\n1. Is the server running on port 8080?\n2. Is the URL correct? (${signalingUrl})\n3. Does the URL end with /ws?`;
+          setError(errorMsg);
           onConnectionChange?.(false);
         };
 
-        ws.onclose = () => {
-          console.log('WebSocket closed');
+        ws.onclose = (event) => {
+          console.log('WebSocket closed', event.code, event.reason);
+          clearTimeout(connectionTimeout);
           onConnectionChange?.(false);
+          
+          // Only show error if it wasn't a clean close and no error was already set
+          if (event.code !== 1000 && event.code !== 1001 && event.code !== 1006) {
+            // Don't override existing error messages
+            setError(prev => prev || `Connection closed unexpectedly (code: ${event.code}). ${event.reason || 'Check if server is running.'}`);
+          }
         };
 
         // Create peer connection
