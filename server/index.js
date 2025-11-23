@@ -68,6 +68,7 @@ wss.on('connection', (ws, req) => {
         case 'offer':
         case 'answer':
         case 'ice-candidate':
+        case 'transcription':
           // Forward signaling messages to other peers in the room
           if (currentRoom) {
             broadcastToRoom(currentRoom, ws, {

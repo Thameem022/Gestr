@@ -5,6 +5,7 @@ interface UseWebRTCOptions {
   signalingUrl: string;
   onConnectionChange?: (connected: boolean) => void;
   onRemoteConnectionChange?: (connected: boolean) => void;
+  onTranscriptionReceived?: (text: string, from: string) => void;
 }
 
 export function useWebRTC({
@@ -12,6 +13,7 @@ export function useWebRTC({
   signalingUrl,
   onConnectionChange,
   onRemoteConnectionChange,
+  onTranscriptionReceived,
 }: UseWebRTCOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -60,10 +62,10 @@ export function useWebRTC({
 
     const init = async () => {
       try {
-        // Get user media
+        // Get user media - VIDEO ONLY (no audio for WebRTC)
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
-          audio: true,
+          audio: false,
         });
         
         if (!mounted) {
@@ -129,9 +131,11 @@ export function useWebRTC({
         const pc = new RTCPeerConnection(iceServers);
         pcRef.current = pc;
 
-        // Add local tracks to peer connection
+        // Add only video tracks to peer connection (skip audio)
         stream.getTracks().forEach(track => {
-          pc.addTrack(track, stream);
+          if (track.kind === 'video') {
+            pc.addTrack(track, stream);
+          }
         });
 
         // Handle remote stream
@@ -215,6 +219,13 @@ export function useWebRTC({
                 onRemoteConnectionChange?.(false);
                 break;
 
+              case 'transcription':
+                console.log('Received transcription:', data.text);
+                if (onTranscriptionReceived) {
+                  onTranscriptionReceived(data.text, data.from || 'Unknown');
+                }
+                break;
+
               case 'error':
                 setError(data.message || 'Unknown error');
                 break;
@@ -244,6 +255,7 @@ export function useWebRTC({
     remoteStream,
     error,
     disconnect,
+    wsRef, // Expose WebSocket for sending messages
   };
 }
 

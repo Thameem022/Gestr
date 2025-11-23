@@ -4,7 +4,8 @@ A minimal but production-ready React + Node.js WebRTC video call application tha
 
 ## 🎯 Features
 
-- **P2P Video/Audio Streaming**: Media never touches the backend server
+- **P2P Video Streaming**: Video-only WebRTC (no audio transmission)
+- **Speech-to-Text**: Optional ElevenLabs integration for real-time transcriptions
 - **Cross-Network Support**: Works between different networks using ngrok tunneling
 - **Real-time Signaling**: WebSocket-based signaling server for WebRTC negotiation
 - **Modern UI**: Built with React, TypeScript, and Tailwind CSS
@@ -29,7 +30,8 @@ A minimal but production-ready React + Node.js WebRTC video call application tha
 
 - Node.js 18+ and npm
 - ngrok (for cross-network calls)
-- Two devices with cameras and microphones
+- Two devices with cameras
+- ElevenLabs API key (optional, for speech-to-text feature)
 
 ### Installation
 
@@ -83,23 +85,24 @@ The frontend will start on `http://localhost:3000`
 
 ### Using the App
 
-1. **On Laptop 1:**
+1. **On Both Laptops:**
    - Open `http://localhost:3000`
    - Enter the ngrok WSS URL (e.g., `wss://abc123.ngrok.io/ws`)
    - Enter a room ID (e.g., `room-123`)
    - Click "Join Room"
-   - Allow camera/microphone permissions
+   - Allow camera permissions (video only, no audio)
 
-2. **On Laptop 2:**
-   - Open `http://localhost:3000` (or the ngrok URL if using HTTPS)
-   - Enter the **same** ngrok WSS URL
-   - Enter the **same** room ID
-   - Click "Join Room"
-   - Allow camera/microphone permissions
+2. **Video Call:**
+   - Both users should see each other's video streams
+   - The connection is peer-to-peer (video doesn't go through the server)
+   - **Note**: Audio is NOT transmitted via WebRTC (video-only call)
 
-3. **Video Call:**
-   - Both users should see each other's video/audio streams
-   - The connection is peer-to-peer (media doesn't go through the server)
+3. **Speech-to-Text (Optional):**
+   - Either laptop can enable Speech-to-Text
+   - Toggle "Enable Speech-to-Text" checkbox
+   - Enter your ElevenLabs API key
+   - Start speaking - transcriptions will appear on both laptops
+   - Transcriptions are sent via WebSocket (not WebRTC)
 
 ## 📁 Project Structure
 
