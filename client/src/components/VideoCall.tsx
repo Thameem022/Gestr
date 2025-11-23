@@ -22,6 +22,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [transcriptions, setTranscriptions] = useState<Transcription[]>([]);
   const [sttEnabled, setSttEnabled] = useState(false);
+  const [sttActive, setSttActive] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [modelId, setModelId] = useState('eleven_turbo_v2_5');
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
@@ -60,6 +61,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
   const { isProcessing: sttProcessing, error: sttError } = useSpeechToText({
     apiKey,
     enabled: sttEnabled && apiKey.length > 0,
+    isActive: sttActive,
     onTranscription: handleTranscription,
     modelId: modelId,
   });
@@ -109,9 +111,9 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
                 </div>
                 {sttEnabled && (
                   <div className="flex items-center gap-2">
-                    <div className={`w-3 h-3 rounded-full ${sttProcessing ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></div>
+                    <div className={`w-3 h-3 rounded-full ${sttActive ? (sttProcessing ? 'bg-green-500 animate-pulse' : 'bg-green-500') : 'bg-gray-500'}`}></div>
                     <span className="text-sm text-gray-300">
-                      STT: {sttProcessing ? 'Listening...' : 'Ready'}
+                      STT: {sttActive ? (sttProcessing ? 'Listening...' : 'Active') : 'Stopped'}
                     </span>
                   </div>
                 )}
@@ -138,6 +140,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
                   } else {
                     setShowApiKeyInput(false);
                     setApiKey('');
+                    setSttActive(false); // Stop transcription when disabled
                   }
                 }}
                 className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
@@ -146,7 +149,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
             </label>
 
             {showApiKeyInput && (
-              <div className="flex items-center gap-2 flex-1 max-w-2xl">
+              <div className="flex items-center gap-2 flex-1 max-w-3xl">
                 <input
                   type="password"
                   value={apiKey}
@@ -158,9 +161,30 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
                   type="text"
                   value={modelId}
                   onChange={(e) => setModelId(e.target.value)}
-                  placeholder="Model ID (e.g., eleven_turbo_v2_5)"
-                  className="w-48 px-3 py-1.5 bg-gray-700 text-white rounded text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                  placeholder="Model ID"
+                  className="w-40 px-3 py-1.5 bg-gray-700 text-white rounded text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
                 />
+                <button
+                  onClick={() => {
+                    if (sttActive) {
+                      setSttActive(false);
+                    } else {
+                      if (apiKey.length > 0) {
+                        setSttActive(true);
+                      }
+                    }
+                  }}
+                  disabled={!apiKey || apiKey.length === 0}
+                  className={`px-4 py-1.5 rounded text-sm font-semibold transition-colors ${
+                    sttActive
+                      ? 'bg-red-600 hover:bg-red-700 text-white'
+                      : apiKey && apiKey.length > 0
+                      ? 'bg-green-600 hover:bg-green-700 text-white'
+                      : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  {sttActive ? '⏹ Stop' : '▶ Start'} Transcription
+                </button>
                 {sttError && (
                   <span className="text-xs text-red-400 whitespace-nowrap">{sttError}</span>
                 )}

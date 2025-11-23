@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 interface UseSpeechToTextOptions {
   apiKey: string;
   enabled: boolean;
+  isActive: boolean; // Whether transcription is actively running
   onTranscription: (text: string) => void;
   modelId?: string; // Optional model_id, defaults to a common STT model
 }
@@ -10,6 +11,7 @@ interface UseSpeechToTextOptions {
 export function useSpeechToText({
   apiKey,
   enabled,
+  isActive,
   onTranscription,
   modelId = 'eleven_turbo_v2_5', // Default model - adjust based on your ElevenLabs plan
 }: UseSpeechToTextOptions) {
@@ -22,8 +24,8 @@ export function useSpeechToText({
   const audioChunksRef = useRef<Float32Array[]>([]);
 
   useEffect(() => {
-    if (!enabled || !apiKey) {
-      // Clean up if disabled
+    if (!enabled || !apiKey || !isActive) {
+      // Clean up if disabled or not active
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -77,7 +79,7 @@ export function useSpeechToText({
         processorRef.current = processor;
 
         processor.onaudioprocess = (e) => {
-          if (!mounted || !enabled) return;
+          if (!mounted || !enabled || !isActive) return;
           
           const inputData = e.inputBuffer.getChannelData(0);
           audioChunksRef.current.push(new Float32Array(inputData));
@@ -90,7 +92,7 @@ export function useSpeechToText({
         const CHUNK_DURATION_MS = 3000; // Send every 3 seconds
 
         intervalRef.current = setInterval(async () => {
-          if (!mounted || !enabled || audioChunksRef.current.length === 0) return;
+          if (!mounted || !enabled || !isActive || audioChunksRef.current.length === 0) return;
 
           try {
             const chunks = [...audioChunksRef.current];
@@ -101,7 +103,7 @@ export function useSpeechToText({
 
             // Send to ElevenLabs API
             const formData = new FormData();
-            formData.append('audio', wavBlob, 'audio.wav');
+            formData.append('file', wavBlob, 'audio.wav');
             formData.append('model_id', modelId);
 
             const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
@@ -165,7 +167,7 @@ export function useSpeechToText({
 
       audioChunksRef.current = [];
     };
-  }, [enabled, apiKey, onTranscription]);
+  }, [enabled, apiKey, isActive, onTranscription, modelId]);
 
   return { isProcessing, error };
 }
