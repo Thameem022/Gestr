@@ -24,7 +24,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
   const [sttEnabled, setSttEnabled] = useState(false);
   const [sttActive, setSttActive] = useState(false);
   const [apiKey, setApiKey] = useState('');
-  const [modelId, setModelId] = useState('eleven_turbo_v2_5');
+  const [modelId, setModelId] = useState('scribe_v1');
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   
   const { localStream, remoteStream, error, disconnect, wsRef } = useWebRTC({
