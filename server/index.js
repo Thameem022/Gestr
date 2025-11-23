@@ -1,6 +1,18 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { classifyLetterFromBase64 } from './letterClassifier.js';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Load environment variables from .env file
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, '.env') });
+// Also try loading from parent directory (project root)
+dotenv.config({ path: join(__dirname, '..', '.env') });
 
 const app = express();
 
@@ -12,6 +24,18 @@ app.use((req, res, next) => {
   next();
 });
 
+// Parse JSON bodies
+app.use(express.json({ limit: '10mb' }));
+
+// Initialize Gemini if API key is available
+let genAI = null;
+if (process.env.GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  console.log('Gemini API initialized');
+} else {
+  console.log('Warning: GEMINI_API_KEY not set, Gemini spelling correction will be disabled');
+}
+
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -21,6 +45,84 @@ const rooms = new Map();
 // Health check endpoint
 app.get('/healthz', (req, res) => {
   res.status(200).send('ok');
+});
+
+// ASL classification endpoint
+app.post('/api/asl/classify', async (req, res) => {
+  try {
+    console.log('ASL classification request received');
+    const { image } = req.body;
+    
+    if (!image) {
+      console.log('ASL classification error: Missing image data');
+      return res.status(400).json({ error: 'Missing image data' });
+    }
+
+    console.log('Processing ASL classification...');
+    const result = await classifyLetterFromBase64(image);
+    console.log('ASL classification result:', result);
+    res.json(result);
+  } catch (error) {
+    console.error('ASL classification error:', error);
+    res.status(500).json({ error: error.message || 'ASL classification failed' });
+  }
+});
+
+// Gemini spelling correction endpoint
+app.post('/api/gemini/correct-spelling', async (req, res) => {
+  try {
+    if (!genAI) {
+      return res.status(503).json({ 
+        error: 'Gemini API not configured. Please set GEMINI_API_KEY environment variable.' 
+      });
+    }
+
+    const { text } = req.body;
+    
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      return res.status(400).json({ error: 'Missing or empty text' });
+    }
+
+    const sanitized = text.trim();
+    console.log('Gemini: Correcting spelling for:', sanitized);
+
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction: 'You are a spelling and grammar correction assistant. Your role is to correct spelling mistakes and grammatical errors in text. Return only the corrected text, nothing else. Do not add explanations, filler words, or commentary. Output only the corrected text.',
+    });
+
+    const prompt = `Correct the spelling and grammar in this text: "${sanitized}". Return only the corrected text.`;
+    
+    const result = await model.generateContent(prompt);
+    const correctedText = result.response.text().trim();
+
+    console.log('Gemini: Original:', sanitized, 'Corrected:', correctedText);
+
+    res.json({
+      originalText: sanitized,
+      correctedText: correctedText,
+    });
+  } catch (error) {
+    console.error('Error in /api/gemini/correct-spelling:', error);
+    
+    // Handle quota/rate limit errors
+    if (error.message && error.message.includes('429')) {
+      const retryAfter = error.message.match(/retry in ([\d.]+)s/i);
+      const retrySeconds = retryAfter ? Math.ceil(parseFloat(retryAfter[1])) : 15;
+      
+      return res.status(429).json({ 
+        error: 'Gemini API quota exceeded',
+        message: `Rate limit exceeded. Please wait ${retrySeconds} seconds before trying again.`,
+        retryAfter: retrySeconds
+      });
+    }
+    
+    // Handle other errors
+    res.status(500).json({ 
+      error: 'Failed to correct spelling',
+      message: error.message || 'Unknown error occurred'
+    });
+  }
 });
 
 // WebSocket connection handling
@@ -69,6 +171,7 @@ wss.on('connection', (ws, req) => {
         case 'answer':
         case 'ice-candidate':
         case 'transcription':
+        case 'asl-letter':
           // Forward signaling messages to other peers in the room
           if (currentRoom) {
             broadcastToRoom(currentRoom, ws, {
