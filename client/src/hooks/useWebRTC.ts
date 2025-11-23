@@ -6,6 +6,7 @@ interface UseWebRTCOptions {
   onConnectionChange?: (connected: boolean) => void;
   onRemoteConnectionChange?: (connected: boolean) => void;
   onTranscriptionReceived?: (text: string, from: string) => void;
+  onASLLetterReceived?: (letter: string, confidence: number, from: string, accumulatedText?: string) => void;
 }
 
 export function useWebRTC({
@@ -14,6 +15,7 @@ export function useWebRTC({
   onConnectionChange,
   onRemoteConnectionChange,
   onTranscriptionReceived,
+  onASLLetterReceived,
 }: UseWebRTCOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -223,6 +225,29 @@ export function useWebRTC({
                 console.log('Received transcription:', data.text);
                 if (onTranscriptionReceived) {
                   onTranscriptionReceived(data.text, data.from || 'Unknown');
+                }
+                break;
+
+              case 'asl-letter':
+                // Handle ASL letter messages (both individual letters and send actions)
+                console.log('Received ASL letter message:', data);
+                if (onASLLetterReceived) {
+                  // If action is 'send', prioritize accumulatedText; otherwise use letter
+                  const textToDisplay = data.action === 'send' && data.accumulatedText 
+                    ? data.accumulatedText 
+                    : (data.accumulatedText || data.letter);
+                  
+                  if (textToDisplay && textToDisplay.trim().length > 0) {
+                    console.log('Calling onASLLetterReceived with:', textToDisplay);
+                    onASLLetterReceived(
+                      data.letter || '',
+                      data.confidence || 0,
+                      data.from || 'Unknown',
+                      data.accumulatedText || data.letter // Pass accumulated text if available
+                    );
+                  } else {
+                    console.log('Skipping ASL message - no text to display');
+                  }
                 }
                 break;
 

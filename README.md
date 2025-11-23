@@ -1,210 +1,205 @@
-# WebRTC Video Call App
+# Gestr · ASL Fingerspelling Assistant
 
-A minimal but production-ready React + Node.js WebRTC video call application that enables two laptops on different networks to stream live video/audio to each other using peer-to-peer connections.
+Gestr turns live ASL fingerspelling into natural English sentences. The workflow is simple:
 
-## 🎯 Features
+1. Capture live webcam video in the browser.
+2. Send frames to a TensorFlow-based Python worker that predicts ASL letters (A–Z).
+3. Accumulate the letters per session.
+4. Send the accumulated raw letters to Gemini, which responds with **only** the final sentence—no filler, no commentary.
+5. (Optional) Push the sentence through the ElevenLabs TTS endpoint for audio playback.
 
-- **P2P Video Streaming**: Video-only WebRTC (no audio transmission)
-- **Speech-to-Text**: Optional ElevenLabs integration for real-time transcriptions
-- **Cross-Network Support**: Works between different networks using ngrok tunneling
-- **Real-time Signaling**: WebSocket-based signaling server for WebRTC negotiation
-- **Modern UI**: Built with React, TypeScript, and Tailwind CSS
-- **STUN Support**: Uses Google's free STUN servers for NAT traversal
+## Features
 
-## 🧩 Tech Stack
+- 🎥 **Live Camera Capture** – Start/stop camera directly from the UI.
+- 🔤 **Letter-Level Recognition** – TensorFlow model predicts individual ASL letters.
+- ✨ **Gemini Spelling Correction** – Accumulated ASL text is automatically corrected for spelling and grammar before sending.
+- 🧹 **Session Control** – Clear or resend whenever you need.
+- 🔊 **Speech-to-Text** – ElevenLabs integration for real-time speech transcription.
 
-### Frontend
-- React 18 + Vite
-- TypeScript
-- Tailwind CSS
-- Native WebRTC APIs
+## Setup
 
-### Backend
-- Node.js + Express
-- WebSocket (ws library)
-- In-memory room management
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Node.js 18+ and npm
-- ngrok (for cross-network calls)
-- Two devices with cameras
-- ElevenLabs API key (optional, for speech-to-text feature)
-
-### Installation
-
-1. **Clone and install dependencies:**
+### 1. Install Node.js dependencies
 
 ```bash
-# Install backend dependencies
-cd server
-npm install
-
-# Install frontend dependencies
-cd ../client
 npm install
 ```
 
-2. **Setup ElevenLabs API Key (Optional, for Speech-to-Text):**
+### 2. Install Python dependencies
 
 ```bash
-# Copy the example env file
-cd client
-cp .env.example .env
-
-# Edit .env and add your ElevenLabs API key
-# VITE_ELEVENLABS_API_KEY=your_api_key_here
+pip3 install -r requirements.txt
 ```
 
-### Running the Application
+Python powers the TensorFlow classifier (`classifier_worker.py`) that stays alive while the Node server runs.
 
-#### Step 1: Start the Signaling Server
+### 3. Configure environment variables
+
+Create a `.env` file in the project root (or `server/` directory):
+
+```env
+PORT=8080
+GEMINI_API_KEY=your_gemini_api_key_here
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here  # For Speech-to-Text (client/.env)
+```
+
+**Note:** 
+- `GEMINI_API_KEY` is required for spelling correction of ASL text
+- `ELEVENLABS_API_KEY` should be set in `client/.env` for Speech-to-Text functionality
+
+### 4. Start the server
 
 ```bash
-cd server
+npm start
+```
+
+For development with file watching:
+
+```bash
 npm run dev
 ```
 
-The server will start on `http://localhost:8080` with:
-- Health check: `http://localhost:8080/healthz`
-- WebSocket endpoint: `ws://localhost:8080/ws`
+### 5. Open the app
 
-#### Step 2: Expose Server with ngrok (for cross-network calls)
+Visit `http://localhost:3000` and grant camera access.
 
-In a new terminal:
+## Usage
 
-```bash
-ngrok http 8080
+1. **Start Camera** – click “Start Camera” to open your webcam.
+2. **Fingerspell** – make each letter in front of the camera; the app samples frames automatically.
+3. **Watch Text Build** – latest letter + accumulated text update in real time.
+4. **Send** – click “Send to Gemini” once you finish spelling; Gemini returns a sentence and nothing else.
+5. **Clear / Repeat** – “Clear” resets the current session; “Stop Camera” halts the video stream.
+
+## API Endpoints
+
+### POST `/api/classify-letter`
+
+Classify a single frame and accumulate the resulting letter.
+
+**Request**
+
+```json
+{
+  "image": "data:image/jpeg;base64,...",
+  "sessionId": "session_123"
+}
 ```
 
-Copy the **WSS URL** (e.g., `wss://abc123.ngrok.io/ws`) - you'll need this for the frontend.
+**Response**
 
-> **Note**: For local testing on the same network, you can use `ws://localhost:8080/ws` directly.
-
-#### Step 3: Start the Frontend
-
-In a new terminal:
-
-```bash
-cd client
-npm run dev
+```json
+{
+  "letter": "H",
+  "confidence": 0.94,
+  "accumulatedText": "HEL",
+  "letters": ["H", "E", "L"],
+  "sessionId": "session_123"
+}
 ```
 
-The frontend will start on `http://localhost:3000`
+### POST `/api/send-to-gemini`
 
-### Using the App
+Send the accumulated letters (or explicit text) to Gemini. The response is always a single sentence.
 
-1. **On Both Laptops:**
-   - Open `http://localhost:3000`
-   - Enter the ngrok WSS URL (e.g., `wss://abc123.ngrok.io/ws`)
-   - Enter a room ID (e.g., `room-123`)
-   - Click "Join Room"
-   - Allow camera permissions (video only, no audio)
+**Request**
 
-2. **Video Call:**
-   - Both users should see each other's video streams
-   - The connection is peer-to-peer (video doesn't go through the server)
-   - **Note**: Audio is NOT transmitted via WebRTC (video-only call)
+```json
+{
+  "sessionId": "session_123"
+}
+```
 
-3. **Speech-to-Text (Optional):**
-   - Either laptop can enable Speech-to-Text
-   - Toggle "Enable Speech-to-Text" checkbox
-   - **API Key Setup:**
-     - Option 1: Add to `.env` file (recommended)
-       - Copy `client/.env.example` to `client/.env`
-       - Add your API key: `VITE_ELEVENLABS_API_KEY=your_key_here`
-     - Option 2: Enter manually in the UI (if not in .env)
-   - Click "Start Transcription" button
-   - Start speaking - transcriptions will appear on both laptops
-   - Transcriptions are sent via WebSocket (not WebRTC)
+**Response**
 
-## 📁 Project Structure
+```json
+{
+  "sentence": "Hello, I need help.",
+  "originalText": "HELLOINEEDHELP"
+}
+```
+
+### POST `/api/clear-session`
+
+Clear cached letters for a session.
+
+```json
+{
+  "sessionId": "session_123"
+}
+```
+
+**Response**
+
+```json
+{
+  "success": true,
+  "sessionId": "session_123"
+}
+```
+
+### POST `/text-to-speech`
+
+Optional endpoint that relays text to ElevenLabs and stores the returned audio.
+
+```json
+{
+  "text": "Hello, how are you?"
+}
+```
+
+## Architecture
+
+- **Frontend**: Vanilla HTML/CSS/JS served from `public/`. A hidden canvas grabs video frames before sending them to the backend.
+- **Backend**: Express.js (`server.js`) provides the REST API and keeps session state.
+- **Letter Classification**: `letterClassifier.js` spawns `classifier_worker.py`, keeping the TensorFlow model warm and communicating over stdin/stdout.
+- **Sentence Formation**: Gemini Flash with strict instructions to reply with the sentence only.
+- **Text-to-Speech**: ElevenLabs endpoint (optional, unchanged).
+
+## File Structure
 
 ```
-Gestr/
-├── server/                 # Backend signaling server
-│   ├── index.js           # Express + WebSocket server
-│   └── package.json
-├── client/                 # Frontend React app
-│   ├── src/
-│   │   ├── components/    # React components
-│   │   │   ├── RoomJoin.tsx
-│   │   │   └── VideoCall.tsx
-│   │   ├── hooks/         # Custom hooks
-│   │   │   └── useWebRTC.ts
-│   │   ├── App.tsx
-│   │   └── main.tsx
-│   └── package.json
+gestr/
+├── server.js              # Express server + routes
+├── letterClassifier.js    # Node bridge to the Python worker
+├── classifier_worker.py   # TensorFlow classifier (stdin/stdout loop)
+├── inference.py           # Standalone webcam demo for debugging
+├── asl_model.keras        # Keras model weights
+├── asl_class_map.npy      # Class index → letter mapping
+├── public/
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
+├── requirements.txt       # Python deps (TensorFlow, OpenCV, NumPy)
+├── package.json
 └── README.md
 ```
 
-## 🔧 Configuration
+## Improving Recognition
 
-### Backend
+- Retrain or fine-tune `asl_model.keras` with more diverse data.
+- Update `asl_class_map.npy` if the class ordering changes.
+- Add temporal smoothing or majority voting inside `accumulateLetter` if you want stricter filtering.
 
-- **Port**: Default `8080` (set via `PORT` environment variable)
-- **WebSocket Path**: `/ws`
-- **Health Check**: `/healthz`
+## Troubleshooting
 
-### Frontend
+**Camera issues**
 
-- **Port**: Default `3000` (configured in `vite.config.ts`)
-- **Signaling URL**: Entered by user in the UI
+- Confirm browser permissions are granted.
+- Chrome/Safari may require HTTPS for camera access; localhost works without it.
+- Open DevTools for detailed console errors.
 
-### WebRTC
+**Python worker issues**
 
-- **STUN Servers**: Google's free STUN servers
-  - `stun:stun.l.google.com:19302`
-  - `stun:stun1.l.google.com:19302`
-- **TURN**: Not included (can be added later for restrictive NATs)
+- Ensure Python 3.9+ is installed: `python3 --version`.
+- Reinstall dependencies: `pip3 install -r requirements.txt`.
+- Watch the Node logs—worker stderr is piped there for easier debugging.
 
-## 🌐 Network Requirements
+**API errors**
 
-- **HTTPS/WSS**: Required for camera/microphone access in browsers
-- **ngrok**: Provides HTTPS/WSS tunnel for cross-network calls
-- **Firewall**: Ensure WebRTC ports are not blocked (typically UDP 1024-65535)
+- Verify `.env` values, especially `GEMINI_API_KEY`.
+- Make sure the server has internet access for Gemini/ElevenLabs calls.
+- Use the Network tab in DevTools to inspect payloads/responses.
 
-## 🐛 Troubleshooting
+## License
 
-### Camera/Microphone Not Working
-- Ensure you're using HTTPS/WSS (not HTTP/WS)
-- Check browser permissions
-- Try a different browser (Chrome/Firefox recommended)
-
-### Connection Fails
-- Verify ngrok is running and URL is correct
-- Check that both users are using the same signaling URL and room ID
-- Check browser console for errors
-- Ensure firewall allows WebRTC traffic
-
-### No Video/Audio
-- Check that both peers have joined the same room
-- Verify STUN servers are accessible
-- For restrictive NATs, consider adding TURN servers
-
-## 📝 Development
-
-### Backend Scripts
-- `npm run dev` - Start with nodemon (auto-reload)
-- `npm start` - Start production server
-
-### Frontend Scripts
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
-
-## 🔒 Security Notes
-
-- This is a minimal implementation for demonstration
-- In production, consider:
-  - Authentication/authorization
-  - Rate limiting
-  - Input validation
-  - TURN server for restrictive networks
-  - HTTPS certificates
-
-## 📄 License
-
-MIT
+ISC

@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useWebRTC } from '../hooks/useWebRTC';
 import { useSpeechToText } from '../hooks/useSpeechToText';
+import { useASLRecognition } from '../hooks/useASLRecognition';
 
 interface Transcription {
   text: string;
   from: string;
   timestamp: number;
+  type?: 'text' | 'asl';
+  confidence?: number;
 }
 
 interface VideoCallProps {
@@ -27,6 +30,13 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
   const apiKey = envApiKey; // Use API key from .env only
   const modelId = 'scribe_v1'; // Fixed model ID
   
+  // ASL letter accumulation state
+  const [accumulatedASLText, setAccumulatedASLText] = useState('');
+  const [latestASLLetter, setLatestASLLetter] = useState<string | null>(null);
+  const [latestASLConfidence, setLatestASLConfidence] = useState<number>(0);
+  const lastLetterRef = useRef<string | null>(null);
+  const letterStabilityRef = useRef<number>(0);
+  
   const { localStream, remoteStream, error, disconnect, wsRef } = useWebRTC({
     roomId,
     signalingUrl,
@@ -37,7 +47,24 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
         text,
         from,
         timestamp: Date.now(),
+        type: 'text',
       }]);
+    },
+    onASLLetterReceived: (letter, confidence, from, accumulatedText) => {
+      // If accumulated text is provided (from send action), show the full accumulated text
+      // Otherwise, if it's just a letter, show the letter
+      const displayText = accumulatedText || letter;
+      
+      // Only add if there's actual text to display
+      if (displayText && displayText.trim().length > 0) {
+        setTranscriptions(prev => [...prev, {
+          text: displayText,
+          from,
+          timestamp: Date.now(),
+          type: 'asl',
+          confidence: confidence || 1.0,
+        }]);
+      }
     },
   });
 
@@ -64,6 +91,156 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
     isActive: sttActive,
     onTranscription: handleTranscription,
     modelId: modelId,
+  });
+
+  // Get server URL from signaling URL (convert ws:// to http:// or wss:// to https://)
+  const serverUrl = signalingUrl.replace(/^ws/, 'http').replace(/\/ws$/, '');
+  
+  // Handle ASL letter detection with accumulation logic
+  // Use useCallback to prevent the function from changing on every render
+  const handleASLLetter = useCallback((letter: string, confidence: number) => {
+    // Only accept letters with confidence above threshold (similar to public/app.js)
+    const CONFIDENCE_THRESHOLD = 0.55; // 55% confidence threshold
+    const STABILITY_COUNT = 2; // Letter must appear 2 times to be accepted
+    
+    if (confidence < CONFIDENCE_THRESHOLD) {
+      return; // Ignore low confidence predictions
+    }
+    
+    // Update latest letter display (always show current prediction)
+    setLatestASLLetter(letter);
+    setLatestASLConfidence(confidence);
+    
+    // Use functional updates to get current state
+    setAccumulatedASLText(currentText => {
+      // Check if same letter appears multiple times (stability check)
+      if (letter === lastLetterRef.current) {
+        letterStabilityRef.current += 1;
+      } else {
+        letterStabilityRef.current = 1;
+        lastLetterRef.current = letter;
+      }
+      
+      // Only add to accumulated text if letter is stable and it's a new letter
+      if (letterStabilityRef.current >= STABILITY_COUNT) {
+        // Only add if it's different from the last letter in accumulated text
+        if (currentText.length === 0 || currentText[currentText.length - 1] !== letter) {
+          const newText = currentText + letter;
+          
+          // Reset stability counter after adding to prevent immediate re-addition
+          letterStabilityRef.current = 0;
+          
+          // Don't send automatically - only accumulate. User will click Send button.
+          // Just update the accumulated text state
+          
+          return newText;
+        }
+      }
+      
+      return currentText; // Return unchanged if no update
+    });
+  }, [wsRef]);
+  
+  // Send accumulated ASL text to laptop 2 (with Gemini spelling correction)
+  const sendASLText = async () => {
+    if (!accumulatedASLText || accumulatedASLText.length === 0) {
+      return;
+    }
+    
+    console.log('Gemini: Correcting spelling for:', accumulatedASLText);
+    
+    try {
+      // First, send to Gemini for spelling correction
+      const response = await fetch(`${serverUrl}/api/gemini/correct-spelling`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: accumulatedASLText }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        if (response.status === 429) {
+          // Rate limit error
+          const retryAfter = errorData.retryAfter || 15;
+          throw new Error(`Gemini API rate limit exceeded. Please wait ${retryAfter} seconds before trying again.`);
+        }
+        throw new Error(errorData.message || errorData.error || 'Gemini spelling correction failed');
+      }
+
+      const result = await response.json();
+      const correctedText = result.correctedText || accumulatedASLText;
+      
+      console.log('Gemini: Original:', accumulatedASLText, 'Corrected:', correctedText);
+      
+      // Send corrected text to laptop 2 via WebSocket
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        const message = {
+          type: 'asl-letter',
+          letter: '', // Empty for send action
+          confidence: 0,
+          accumulatedText: correctedText,
+          originalText: accumulatedASLText, // Include original for reference
+          action: 'send', // Indicate this is a send action
+        };
+        console.log('Gemini: Sending ASL text to laptop 2:', message);
+        wsRef.current.send(JSON.stringify(message));
+        
+        // Add to local transcriptions (show corrected text)
+        setTranscriptions(prev => [...prev, {
+          text: correctedText,
+          from: 'You',
+          timestamp: Date.now(),
+          type: 'asl',
+          confidence: 1.0,
+        }]);
+        
+        // Clear after sending
+        clearASLText();
+      }
+    } catch (error) {
+      console.error('Gemini: Error correcting spelling:', error);
+      // If Gemini fails, send original text anyway
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        const fallbackMessage = {
+          type: 'asl-letter',
+          letter: '',
+          confidence: 0,
+          accumulatedText: accumulatedASLText,
+          action: 'send',
+        };
+        console.log('Gemini: Sending original text (fallback) to laptop 2:', fallbackMessage);
+        wsRef.current.send(JSON.stringify(fallbackMessage));
+        
+        setTranscriptions(prev => [...prev, {
+          text: accumulatedASLText,
+          from: 'You',
+          timestamp: Date.now(),
+          type: 'asl',
+          confidence: 1.0,
+        }]);
+        
+        clearASLText();
+      }
+    }
+  };
+  
+  // Clear accumulated ASL text
+  const clearASLText = () => {
+    setAccumulatedASLText('');
+    setLatestASLLetter(null);
+    setLatestASLConfidence(0);
+    lastLetterRef.current = null;
+    letterStabilityRef.current = 0;
+  };
+
+  // ASL recognition runs continuously when local stream is available
+  const { isProcessing: aslProcessing, error: aslError, lastLetter, lastConfidence } = useASLRecognition({
+    videoStream: localStream,
+    enabled: !!localStream, // Enabled when video stream is available
+    onLetterDetected: handleASLLetter,
+    apiUrl: serverUrl,
   });
 
   // Auto-scroll transcriptions to bottom
@@ -117,6 +294,14 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
                     </span>
                   </div>
                 )}
+                {localStream && (
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3 h-3 rounded-full ${aslProcessing ? 'bg-blue-500 animate-pulse' : 'bg-blue-400'}`}></div>
+                    <span className="text-sm text-gray-300">
+                      ASL: {aslProcessing ? 'Processing...' : lastLetter ? `${lastLetter} (${(lastConfidence * 100).toFixed(0)}%)` : 'Ready'}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
             <button
@@ -167,19 +352,31 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
         </div>
 
         {/* Error Display */}
-        {error && (
+        {(error || aslError) && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 whitespace-pre-line">
             <strong>Error: </strong>
-            <div className="mt-1">{error}</div>
-            <div className="mt-2 text-sm">
-              <strong>Debugging steps:</strong>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li>Check browser console (F12) for detailed errors</li>
-                <li>Verify server is running: <code className="bg-red-200 px-1 rounded">cd server && npm run dev</code></li>
-                <li>If using ngrok, verify it's running: <code className="bg-red-200 px-1 rounded">ngrok http 8080</code></li>
-                <li>Check the signaling URL format: should be <code className="bg-red-200 px-1 rounded">ws://localhost:8080/ws</code> or <code className="bg-red-200 px-1 rounded">wss://your-url.ngrok.io/ws</code></li>
-              </ul>
-            </div>
+            <div className="mt-1">{error || aslError}</div>
+            {error && (
+              <div className="mt-2 text-sm">
+                <strong>Debugging steps:</strong>
+                <ul className="list-disc list-inside mt-1 space-y-1">
+                  <li>Check browser console (F12) for detailed errors</li>
+                  <li>Verify server is running: <code className="bg-red-200 px-1 rounded">cd server && npm run dev</code></li>
+                  <li>If using ngrok, verify it's running: <code className="bg-red-200 px-1 rounded">ngrok http 8080</code></li>
+                  <li>Check the signaling URL format: should be <code className="bg-red-200 px-1 rounded">ws://localhost:8080/ws</code> or <code className="bg-red-200 px-1 rounded">wss://your-url.ngrok.io/ws</code></li>
+                </ul>
+              </div>
+            )}
+            {aslError && (
+              <div className="mt-2 text-sm">
+                <strong>ASL Recognition Error:</strong>
+                <ul className="list-disc list-inside mt-1 space-y-1">
+                  <li>Ensure Python 3 is installed</li>
+                  <li>Install dependencies: <code className="bg-red-200 px-1 rounded">pip install -r requirements.txt</code></li>
+                  <li>Verify classifier_worker.py is in the server directory</li>
+                </ul>
+              </div>
+            )}
           </div>
         )}
 
@@ -233,13 +430,63 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
           </div>
         </div>
 
+        {/* ASL Status Panel (Laptop 1 only) */}
+        {localStream && (
+          <div className="mt-4 bg-gray-800 rounded-lg overflow-hidden shadow-xl">
+            <div className="bg-gray-700 px-4 py-2 flex items-center justify-between">
+              <h3 className="text-white font-medium">ASL Recognition Status</h3>
+              <div className="flex items-center gap-2">
+                {accumulatedASLText && (
+                  <>
+                    <button
+                      onClick={sendASLText}
+                      className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded transition-colors"
+                    >
+                      Send
+                    </button>
+                    <button
+                      onClick={clearASLText}
+                      className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white text-sm font-semibold rounded transition-colors"
+                    >
+                      Clear
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="p-4 grid grid-cols-3 gap-4">
+              <div className="bg-gray-700 rounded-lg p-3">
+                <div className="text-xs text-gray-400 uppercase mb-1">Latest Letter</div>
+                <div className="text-4xl font-bold text-blue-400 text-center">
+                  {latestASLLetter || '--'}
+                </div>
+              </div>
+              <div className="bg-gray-700 rounded-lg p-3">
+                <div className="text-xs text-gray-400 uppercase mb-1">Confidence</div>
+                <div className="text-2xl font-semibold text-blue-300 text-center">
+                  {latestASLConfidence > 0 ? `${(latestASLConfidence * 100).toFixed(0)}%` : '--'}
+                </div>
+              </div>
+              <div className="bg-gray-700 rounded-lg p-3 col-span-1">
+                <div className="text-xs text-gray-400 uppercase mb-1">Accumulated Text</div>
+                <div className="text-lg font-mono text-blue-200 break-words min-h-[2rem]">
+                  {accumulatedASLText || 'Nothing yet'}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Transcriptions Display */}
         <div className="mt-4 bg-gray-800 rounded-lg overflow-hidden shadow-xl">
           <div className="bg-gray-700 px-4 py-2 flex items-center justify-between">
             <h3 className="text-white font-medium">Transcriptions</h3>
             {transcriptions.length > 0 && (
               <button
-                onClick={() => setTranscriptions([])}
+                onClick={() => {
+                  setTranscriptions([]);
+                  clearASLText();
+                }}
                 className="text-xs text-gray-400 hover:text-white transition-colors"
               >
                 Clear
@@ -257,6 +504,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
               transcriptions.map((transcription, index) => {
                 const isFromMe = transcription.from === 'You';
                 const time = new Date(transcription.timestamp).toLocaleTimeString();
+                const isASL = transcription.type === 'asl';
                 
                 return (
                   <div
@@ -264,14 +512,32 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
                     className={`flex flex-col ${isFromMe ? 'items-end' : 'items-start'}`}
                   >
                     <div className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                      isFromMe 
-                        ? 'bg-purple-600 text-white' 
-                        : 'bg-gray-700 text-gray-100'
+                      isASL
+                        ? isFromMe 
+                          ? 'bg-blue-600 text-white' 
+                          : 'bg-blue-700 text-gray-100'
+                        : isFromMe 
+                          ? 'bg-purple-600 text-white' 
+                          : 'bg-gray-700 text-gray-100'
                     }`}>
-                      <div className="text-xs font-semibold mb-1 opacity-80">
-                        {isFromMe ? 'You' : transcription.from} • {time}
+                      <div className="text-xs font-semibold mb-1 opacity-80 flex items-center gap-2">
+                        <span>
+                          {isFromMe ? 'You' : transcription.from} • {time}
+                        </span>
+                        {isASL && (
+                          <span className="px-1.5 py-0.5 bg-black bg-opacity-30 rounded text-xs">
+                            ASL
+                          </span>
+                        )}
+                        {isASL && transcription.confidence && (
+                          <span className="text-xs opacity-70">
+                            {(transcription.confidence * 100).toFixed(0)}%
+                          </span>
+                        )}
                       </div>
-                      <div className="text-sm">{transcription.text}</div>
+                      <div className={`text-sm ${isASL ? 'text-2xl font-bold' : ''}`}>
+                        {transcription.text}
+                      </div>
                     </div>
                   </div>
                 );
