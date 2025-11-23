@@ -4,12 +4,14 @@ interface UseSpeechToTextOptions {
   apiKey: string;
   enabled: boolean;
   onTranscription: (text: string) => void;
+  modelId?: string; // Optional model_id, defaults to a common STT model
 }
 
 export function useSpeechToText({
   apiKey,
   enabled,
   onTranscription,
+  modelId = 'eleven_turbo_v2_5', // Default model - adjust based on your ElevenLabs plan
 }: UseSpeechToTextOptions) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +102,7 @@ export function useSpeechToText({
             // Send to ElevenLabs API
             const formData = new FormData();
             formData.append('audio', wavBlob, 'audio.wav');
+            formData.append('model_id', modelId);
 
             const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
               method: 'POST',

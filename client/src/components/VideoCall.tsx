@@ -23,6 +23,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
   const [transcriptions, setTranscriptions] = useState<Transcription[]>([]);
   const [sttEnabled, setSttEnabled] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [modelId, setModelId] = useState('eleven_turbo_v2_5');
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   
   const { localStream, remoteStream, error, disconnect, wsRef } = useWebRTC({
@@ -60,6 +61,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
     apiKey,
     enabled: sttEnabled && apiKey.length > 0,
     onTranscription: handleTranscription,
+    modelId: modelId,
   });
 
   // Auto-scroll transcriptions to bottom
@@ -144,7 +146,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
             </label>
 
             {showApiKeyInput && (
-              <div className="flex items-center gap-2 flex-1 max-w-md">
+              <div className="flex items-center gap-2 flex-1 max-w-2xl">
                 <input
                   type="password"
                   value={apiKey}
@@ -152,8 +154,15 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
                   placeholder="Enter ElevenLabs API Key"
                   className="flex-1 px-3 py-1.5 bg-gray-700 text-white rounded text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
                 />
+                <input
+                  type="text"
+                  value={modelId}
+                  onChange={(e) => setModelId(e.target.value)}
+                  placeholder="Model ID (e.g., eleven_turbo_v2_5)"
+                  className="w-48 px-3 py-1.5 bg-gray-700 text-white rounded text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                />
                 {sttError && (
-                  <span className="text-xs text-red-400">{sttError}</span>
+                  <span className="text-xs text-red-400 whitespace-nowrap">{sttError}</span>
                 )}
               </div>
             )}
