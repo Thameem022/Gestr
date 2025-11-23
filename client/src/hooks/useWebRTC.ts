@@ -222,9 +222,11 @@ export function useWebRTC({
                 break;
 
               case 'transcription':
-                console.log('Received transcription:', data.text);
+                console.log('STT: Received transcription from peer:', data.text, 'from:', data.from);
                 if (onTranscriptionReceived) {
                   onTranscriptionReceived(data.text, data.from || 'Unknown');
+                } else {
+                  console.log('STT: onTranscriptionReceived callback not set');
                 }
                 break;
 

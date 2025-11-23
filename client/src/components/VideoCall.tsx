@@ -70,18 +70,24 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
 
   // Handle transcription from STT
   const handleTranscription = (text: string) => {
+    console.log('STT: handleTranscription called with:', text);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
+      const message = {
         type: 'transcription',
         text: text,
-      }));
+      };
+      console.log('STT: Sending transcription to other peer:', message);
+      wsRef.current.send(JSON.stringify(message));
       
       // Also add to local transcriptions
       setTranscriptions(prev => [...prev, {
         text,
         from: 'You',
         timestamp: Date.now(),
+        type: 'text',
       }]);
+    } else {
+      console.log('STT: WebSocket not connected, cannot send transcription');
     }
   };
 
