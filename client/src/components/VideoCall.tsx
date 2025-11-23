@@ -51,45 +51,42 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
       }]);
     },
     onASLLetterReceived: (letter, confidence, from, accumulatedText) => {
-      // If accumulated text is provided (from send action), show the full accumulated text
-      // Otherwise, if it's just a letter, show the letter
+      // If accumulated text is provided, show the full accumulated text
       const displayText = accumulatedText || letter;
-      
-      // Only add if there's actual text to display
-      if (displayText && displayText.trim().length > 0) {
-        setTranscriptions(prev => [...prev, {
-          text: displayText,
-          from,
-          timestamp: Date.now(),
-          type: 'asl',
-          confidence: confidence || 1.0,
-        }]);
-      }
+      setTranscriptions(prev => [...prev, {
+        text: displayText,
+        from,
+        timestamp: Date.now(),
+        type: 'asl',
+        confidence: confidence || 1.0,
+      }]);
     },
   });
 
   // Handle transcription from STT
-  const handleTranscription = (text: string) => {
-    console.log('STT: handleTranscription called with:', text);
+  // Use useCallback to prevent the function from changing on every render
+  const handleTranscription = useCallback((text: string) => {
+    if (!text || !text.trim()) {
+      return; // Ignore empty transcriptions
+    }
+    
+    const trimmedText = text.trim();
+    
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const message = {
+      wsRef.current.send(JSON.stringify({
         type: 'transcription',
-        text: text,
-      };
-      console.log('STT: Sending transcription to other peer:', message);
-      wsRef.current.send(JSON.stringify(message));
+        text: trimmedText,
+      }));
       
       // Also add to local transcriptions
       setTranscriptions(prev => [...prev, {
-        text,
+        text: trimmedText,
         from: 'You',
         timestamp: Date.now(),
         type: 'text',
       }]);
-    } else {
-      console.log('STT: WebSocket not connected, cannot send transcription');
     }
-  };
+  }, [wsRef]);
 
   const { isProcessing: sttProcessing, error: sttError } = useSpeechToText({
     apiKey,
@@ -100,31 +97,43 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
   });
 
   // Get server URL from signaling URL (convert ws:// to http:// or wss:// to https://)
-  const serverUrl = signalingUrl.replace(/^ws/, 'http').replace(/\/ws$/, '');
+  // If using ngrok, always use HTTPS to avoid redirect issues
+  let serverUrl = signalingUrl.replace(/^ws/, 'http').replace(/\/ws$/, '');
+  if (serverUrl.includes('ngrok')) {
+    // ngrok requires HTTPS, so use https:// even if signaling URL uses ws://
+    serverUrl = serverUrl.replace(/^http:/, 'https:');
+  }
+  console.log('ASL: Server URL:', serverUrl, 'from signaling URL:', signalingUrl);
   
   // Handle ASL letter detection with accumulation logic
   // Use useCallback to prevent the function from changing on every render
   const handleASLLetter = useCallback((letter: string, confidence: number) => {
+    console.log('ASL: handleASLLetter called:', letter, confidence);
+    
     // Only accept letters with confidence above threshold (similar to public/app.js)
     const CONFIDENCE_THRESHOLD = 0.55; // 55% confidence threshold
     const STABILITY_COUNT = 2; // Letter must appear 2 times to be accepted
     
     if (confidence < CONFIDENCE_THRESHOLD) {
+      console.log('ASL: Confidence too low:', confidence, '<', CONFIDENCE_THRESHOLD);
       return; // Ignore low confidence predictions
     }
     
     // Update latest letter display (always show current prediction)
     setLatestASLLetter(letter);
     setLatestASLConfidence(confidence);
+    console.log('ASL: Updated latest letter display:', letter, confidence);
     
     // Use functional updates to get current state
     setAccumulatedASLText(currentText => {
       // Check if same letter appears multiple times (stability check)
       if (letter === lastLetterRef.current) {
         letterStabilityRef.current += 1;
+        console.log('ASL: Same letter, stability count:', letterStabilityRef.current);
       } else {
         letterStabilityRef.current = 1;
         lastLetterRef.current = letter;
+        console.log('ASL: New letter detected, reset stability');
       }
       
       // Only add to accumulated text if letter is stable and it's a new letter
@@ -132,6 +141,7 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
         // Only add if it's different from the last letter in accumulated text
         if (currentText.length === 0 || currentText[currentText.length - 1] !== letter) {
           const newText = currentText + letter;
+          console.log('ASL: Adding letter to accumulated text:', letter, 'New text:', newText);
           
           // Reset stability counter after adding to prevent immediate re-addition
           letterStabilityRef.current = 0;
@@ -140,95 +150,51 @@ export default function VideoCall({ roomId, signalingUrl, onLeave }: VideoCallPr
           // Just update the accumulated text state
           
           return newText;
+        } else {
+          console.log('ASL: Letter same as last in accumulated text, skipping');
         }
+      } else {
+        console.log('ASL: Letter not stable yet, count:', letterStabilityRef.current, '<', STABILITY_COUNT);
       }
       
       return currentText; // Return unchanged if no update
     });
   }, [wsRef]);
   
-  // Send accumulated ASL text to laptop 2 (with Gemini spelling correction)
-  const sendASLText = async () => {
+  // Send accumulated ASL text to laptop 2
+  const sendASLText = () => {
     if (!accumulatedASLText || accumulatedASLText.length === 0) {
+      console.log('ASL: No text to send');
       return;
     }
     
-    console.log('Gemini: Correcting spelling for:', accumulatedASLText);
+    console.log('ASL: Sending accumulated text:', accumulatedASLText);
     
-    try {
-      // First, send to Gemini for spelling correction
-      const response = await fetch(`${serverUrl}/api/gemini/correct-spelling`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: accumulatedASLText }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        if (response.status === 429) {
-          // Rate limit error
-          const retryAfter = errorData.retryAfter || 15;
-          throw new Error(`Gemini API rate limit exceeded. Please wait ${retryAfter} seconds before trying again.`);
-        }
-        throw new Error(errorData.message || errorData.error || 'Gemini spelling correction failed');
-      }
-
-      const result = await response.json();
-      const correctedText = result.correctedText || accumulatedASLText;
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'asl-letter',
+        letter: '', // Empty for send action
+        confidence: 0,
+        accumulatedText: accumulatedASLText,
+        action: 'send', // Indicate this is a send action
+      }));
       
-      console.log('Gemini: Original:', accumulatedASLText, 'Corrected:', correctedText);
+      console.log('ASL: Sent to WebSocket:', accumulatedASLText);
       
-      // Send corrected text to laptop 2 via WebSocket
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        const message = {
-          type: 'asl-letter',
-          letter: '', // Empty for send action
-          confidence: 0,
-          accumulatedText: correctedText,
-          originalText: accumulatedASLText, // Include original for reference
-          action: 'send', // Indicate this is a send action
-        };
-        console.log('Gemini: Sending ASL text to laptop 2:', message);
-        wsRef.current.send(JSON.stringify(message));
-        
-        // Add to local transcriptions (show corrected text)
-        setTranscriptions(prev => [...prev, {
-          text: correctedText,
-          from: 'You',
-          timestamp: Date.now(),
-          type: 'asl',
-          confidence: 1.0,
-        }]);
-        
-        // Clear after sending
-        clearASLText();
-      }
-    } catch (error) {
-      console.error('Gemini: Error correcting spelling:', error);
-      // If Gemini fails, send original text anyway
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        const fallbackMessage = {
-          type: 'asl-letter',
-          letter: '',
-          confidence: 0,
-          accumulatedText: accumulatedASLText,
-          action: 'send',
-        };
-        console.log('Gemini: Sending original text (fallback) to laptop 2:', fallbackMessage);
-        wsRef.current.send(JSON.stringify(fallbackMessage));
-        
-        setTranscriptions(prev => [...prev, {
-          text: accumulatedASLText,
-          from: 'You',
-          timestamp: Date.now(),
-          type: 'asl',
-          confidence: 1.0,
-        }]);
-        
-        clearASLText();
-      }
+      // Add to local transcriptions
+      setTranscriptions(prev => [...prev, {
+        text: accumulatedASLText,
+        from: 'You',
+        timestamp: Date.now(),
+        type: 'asl',
+        confidence: 1.0,
+      }]);
+      
+      // Clear after sending
+      clearASLText();
+      console.log('ASL: Cleared accumulated text after sending');
+    } else {
+      console.log('ASL: WebSocket not connected, cannot send');
     }
   };
   

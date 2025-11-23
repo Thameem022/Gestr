@@ -17,10 +17,17 @@ export function useSpeechToText({
 }: UseSpeechToTextOptions) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const audioChunksRef = useRef<Float32Array[]>([]);
+  const onTranscriptionRef = useRef(onTranscription);
+  
+  // Update ref when callback changes
+  useEffect(() => {
+    onTranscriptionRef.current = onTranscription;
+  }, [onTranscription]);
 
   useEffect(() => {
     if (!enabled || !apiKey || !isActive) {
@@ -29,9 +36,13 @@ export function useSpeechToText({
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-        mediaRecorderRef.current = null;
+      if (processorRef.current) {
+        processorRef.current.disconnect();
+        processorRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
       }
       if (audioStreamRef.current) {
         audioStreamRef.current.getTracks().forEach(track => track.stop());
@@ -46,7 +57,6 @@ export function useSpeechToText({
 
     const init = async () => {
       try {
-        console.log('STT: Initializing speech-to-text...');
         setIsProcessing(true);
         setError(null);
 
@@ -64,61 +74,42 @@ export function useSpeechToText({
           return;
         }
 
-        console.log('STT: Audio stream obtained');
         audioStreamRef.current = audioStream;
 
-        // Use MediaRecorder for more reliable audio capture
-        const mimeType = MediaRecorder.isTypeSupported('audio/webm') 
-          ? 'audio/webm' 
-          : MediaRecorder.isTypeSupported('audio/mp4')
-          ? 'audio/mp4'
-          : 'audio/webm'; // fallback
+        // Create AudioContext to capture audio
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        audioContextRef.current = audioContext;
 
-        const mediaRecorder = new MediaRecorder(audioStream, {
-          mimeType: mimeType,
-        });
-        mediaRecorderRef.current = mediaRecorder;
+        const source = audioContext.createMediaStreamSource(audioStream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
 
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0 && mounted && enabled && isActive) {
-            audioChunksRef.current.push(event.data);
-          }
+        processor.onaudioprocess = (e) => {
+          if (!mounted || !enabled || !isActive) return;
+          
+          const inputData = e.inputBuffer.getChannelData(0);
+          audioChunksRef.current.push(new Float32Array(inputData));
         };
 
-        mediaRecorder.onerror = (event) => {
-          console.error('STT: MediaRecorder error:', event);
-          if (mounted) {
-            setError('MediaRecorder error occurred');
-          }
-        };
-
-        // Start recording
-        mediaRecorder.start(1000); // Collect data every 1 second
-        console.log('STT: MediaRecorder started');
+        source.connect(processor);
+        processor.connect(audioContext.destination);
 
         // Send audio chunks to ElevenLabs API periodically
         const CHUNK_DURATION_MS = 3000; // Send every 3 seconds
 
         intervalRef.current = setInterval(async () => {
-          if (!mounted || !enabled || !isActive || audioChunksRef.current.length === 0) {
-            return;
-          }
+          if (!mounted || !enabled || !isActive || audioChunksRef.current.length === 0) return;
 
           try {
             const chunks = [...audioChunksRef.current];
             audioChunksRef.current = []; // Clear chunks
 
-            if (chunks.length === 0) {
-              return;
-            }
-
-            // Combine chunks into a single blob
-            const audioBlob = new Blob(chunks, { type: mimeType });
-            console.log('STT: Sending audio to ElevenLabs, size:', audioBlob.size, 'bytes');
+            // Convert Float32Array chunks to WAV format
+            const wavBlob = convertToWav(chunks, audioContext.sampleRate);
 
             // Send to ElevenLabs API
             const formData = new FormData();
-            formData.append('file', audioBlob, 'audio.webm');
+            formData.append('file', wavBlob, 'audio.wav');
             formData.append('model_id', modelId);
             formData.append('language_code', 'eng'); // Restrict to English only
 
@@ -132,32 +123,24 @@ export function useSpeechToText({
 
             if (!response.ok) {
               const errorText = await response.text();
-              console.error('STT: ElevenLabs API error:', response.status, errorText);
               throw new Error(`ElevenLabs API error: ${response.status} ${response.statusText} - ${errorText}`);
             }
 
             const data = await response.json();
-            console.log('STT: Received transcription:', data);
-            
             if (data.text && data.text.trim() && mounted) {
-              console.log('STT: Calling onTranscription with:', data.text.trim());
-              onTranscription(data.text.trim());
-            } else {
-              console.log('STT: No text in response or empty');
+              // Use ref to avoid stale closure
+              onTranscriptionRef.current(data.text.trim());
             }
           } catch (err) {
-            console.error('STT: Speech-to-text error:', err);
+            console.error('Speech-to-text error:', err);
             if (mounted) {
               setError(err instanceof Error ? err.message : 'Speech-to-text failed');
             }
           }
         }, CHUNK_DURATION_MS);
 
-        setIsProcessing(false);
-        console.log('STT: Initialization complete');
-
       } catch (err) {
-        console.error('STT: Error initializing speech-to-text:', err);
+        console.error('Error initializing speech-to-text:', err);
         if (mounted) {
           setError(err instanceof Error ? err.message : 'Failed to initialize speech-to-text');
           setIsProcessing(false);
@@ -175,9 +158,14 @@ export function useSpeechToText({
         intervalRef.current = null;
       }
       
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-        mediaRecorderRef.current = null;
+      if (processorRef.current) {
+        processorRef.current.disconnect();
+        processorRef.current = null;
+      }
+      
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
       }
 
       if (audioStreamRef.current) {
@@ -187,8 +175,48 @@ export function useSpeechToText({
 
       audioChunksRef.current = [];
     };
-  }, [enabled, apiKey, isActive, onTranscription, modelId]);
+  }, [enabled, apiKey, isActive, modelId]); // Removed onTranscription from dependencies
 
   return { isProcessing, error };
+}
+
+// Helper function to convert Float32Array to WAV blob
+function convertToWav(chunks: Float32Array[], sampleRate: number): Blob {
+  const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const buffer = new ArrayBuffer(44 + length * 2);
+  const view = new DataView(buffer);
+  
+  // WAV header
+  const writeString = (offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+  
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, length * 2, true);
+  
+  // Convert audio data
+  let offset = 44;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      const sample = Math.max(-1, Math.min(1, chunk[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+  }
+  
+  return new Blob([buffer], { type: 'audio/wav' });
 }
 

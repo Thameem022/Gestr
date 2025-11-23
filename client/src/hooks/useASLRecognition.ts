@@ -49,7 +49,11 @@ export function useASLRecognition({
     videoRef.current = video;
     
     // Ensure video plays
-    video.play().catch(() => {});
+    video.play().catch(err => {
+      console.error('ASL: Error playing video:', err);
+    });
+    
+    console.log('ASL: Video element created, stream tracks:', videoStream.getTracks().length);
 
     // Create canvas for frame capture
     const canvas = document.createElement('canvas');
@@ -80,6 +84,8 @@ export function useASLRecognition({
 
         // Convert canvas to base64
         const imageBase64 = canvas.toDataURL('image/jpeg', 0.8);
+
+        console.log('ASL: Sending classification request to:', `${apiUrl}/api/asl/classify`);
         
         // Send to server for classification
         const response = await fetch(`${apiUrl}/api/asl/classify`, {
@@ -96,8 +102,11 @@ export function useASLRecognition({
 
         const result = await response.json();
         
+        console.log('ASL: Received result from server:', result);
+        
         // Check mounted state before processing
         if (!mounted) {
+          console.log('ASL: Component unmounted, skipping result');
           return;
         }
         
@@ -105,15 +114,25 @@ export function useASLRecognition({
           setLastLetter(result.letter);
           setLastConfidence(result.confidence);
           
+          console.log('ASL: Result valid, confidence:', result.confidence, 'threshold: 0.55');
+          
           // Only call callback if confidence is above threshold (55%)
           if (result.confidence > 0.55) {
+            console.log('ASL: Calling onLetterDetected callback with:', result.letter, result.confidence);
             // Check mounted again before callback and use ref to avoid stale closure
             if (mounted) {
               onLetterDetectedRef.current(result.letter, result.confidence);
+            } else {
+              console.log('ASL: Not mounted, skipping callback');
             }
+          } else {
+            console.log('ASL: Confidence too low, not calling callback');
           }
+        } else {
+          console.log('ASL: Invalid result:', { letter: result.letter, confidence: result.confidence });
         }
       } catch (err) {
+        console.error('ASL recognition error:', err);
         if (mounted) {
           setError(err instanceof Error ? err.message : 'ASL recognition failed');
         }
@@ -129,6 +148,7 @@ export function useASLRecognition({
 
     // Initial capture after video is ready
     video.addEventListener('loadedmetadata', () => {
+      console.log('ASL: Video metadata loaded, readyState:', video.readyState);
       if (mounted) {
         // Wait a bit for video to actually start playing
         setTimeout(() => {
@@ -138,8 +158,17 @@ export function useASLRecognition({
         }, 500);
       }
     });
+    
+    video.addEventListener('playing', () => {
+      console.log('ASL: Video is playing');
+    });
+    
+    video.addEventListener('error', (e) => {
+      console.error('ASL: Video error:', e);
+    });
 
     return () => {
+      console.log('ASL: Cleanup function called, setting mounted = false');
       mounted = false;
       if (intervalRef.current) {
         clearInterval(intervalRef.current);

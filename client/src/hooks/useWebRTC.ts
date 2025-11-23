@@ -222,34 +222,21 @@ export function useWebRTC({
                 break;
 
               case 'transcription':
-                console.log('STT: Received transcription from peer:', data.text, 'from:', data.from);
+                console.log('Received transcription:', data.text);
                 if (onTranscriptionReceived) {
                   onTranscriptionReceived(data.text, data.from || 'Unknown');
-                } else {
-                  console.log('STT: onTranscriptionReceived callback not set');
                 }
                 break;
 
               case 'asl-letter':
-                // Handle ASL letter messages (both individual letters and send actions)
-                console.log('Received ASL letter message:', data);
+                console.log('Received ASL letter:', data.letter, data.confidence, 'Accumulated:', data.accumulatedText);
                 if (onASLLetterReceived) {
-                  // If action is 'send', prioritize accumulatedText; otherwise use letter
-                  const textToDisplay = data.action === 'send' && data.accumulatedText 
-                    ? data.accumulatedText 
-                    : (data.accumulatedText || data.letter);
-                  
-                  if (textToDisplay && textToDisplay.trim().length > 0) {
-                    console.log('Calling onASLLetterReceived with:', textToDisplay);
-                    onASLLetterReceived(
-                      data.letter || '',
-                      data.confidence || 0,
-                      data.from || 'Unknown',
-                      data.accumulatedText || data.letter // Pass accumulated text if available
-                    );
-                  } else {
-                    console.log('Skipping ASL message - no text to display');
-                  }
+                  onASLLetterReceived(
+                    data.letter,
+                    data.confidence || 0,
+                    data.from || 'Unknown',
+                    data.accumulatedText // Pass accumulated text if available
+                  );
                 }
                 break;
 
