@@ -47,6 +47,17 @@ cd ../client
 npm install
 ```
 
+2. **Setup ElevenLabs API Key (Optional, for Speech-to-Text):**
+
+```bash
+# Copy the example env file
+cd client
+cp .env.example .env
+
+# Edit .env and add your ElevenLabs API key
+# VITE_ELEVENLABS_API_KEY=your_api_key_here
+```
+
 ### Running the Application
 
 #### Step 1: Start the Signaling Server
@@ -100,7 +111,12 @@ The frontend will start on `http://localhost:3000`
 3. **Speech-to-Text (Optional):**
    - Either laptop can enable Speech-to-Text
    - Toggle "Enable Speech-to-Text" checkbox
-   - Enter your ElevenLabs API key
+   - **API Key Setup:**
+     - Option 1: Add to `.env` file (recommended)
+       - Copy `client/.env.example` to `client/.env`
+       - Add your API key: `VITE_ELEVENLABS_API_KEY=your_key_here`
+     - Option 2: Enter manually in the UI (if not in .env)
+   - Click "Start Transcription" button
    - Start speaking - transcriptions will appear on both laptops
    - Transcriptions are sent via WebSocket (not WebRTC)
 

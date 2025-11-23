@@ -13,13 +13,13 @@ export function useSpeechToText({
   enabled,
   isActive,
   onTranscription,
-  modelId = 'eleven_turbo_v2_5', // Default model - adjust based on your ElevenLabs plan
+  modelId = 'scribe_v1', // Default model - adjust based on your ElevenLabs plan
 }: UseSpeechToTextOptions) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Float32Array[]>([]);
 
@@ -105,6 +105,7 @@ export function useSpeechToText({
             const formData = new FormData();
             formData.append('file', wavBlob, 'audio.wav');
             formData.append('model_id', modelId);
+            formData.append('language_code', 'eng'); // Restrict to English only
 
             const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
               method: 'POST',
